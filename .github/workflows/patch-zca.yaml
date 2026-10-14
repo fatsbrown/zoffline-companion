@@ -1,0 +1,76 @@
+name: patch-zca
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Install apk-mitm
+        run: npm install -g apk-mitm
+
+      - name: Install Apktool
+        run: |
+          mkdir -p bin
+          curl -sLO https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool
+          curl -sL -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar
+          mv apktool apktool.jar bin/
+          chmod +x bin/apktool bin/apktool.jar
+          echo "$GITHUB_WORKSPACE/bin" >> $GITHUB_PATH
+
+      - name: Download APK
+        run: |
+          URL=$(cat original.txt)
+          curl -sL -o zca.apk "$URL"
+
+      - name: Decode APK
+        run: |
+          apktool d zca.apk -o zca_decoded
+
+      - name: Modify resources
+        run: |
+          sed -i '/<key>react_native_fitness_view<\/key>/{n;s/<value>false<\/value>/<value>true<\/value>/;}' zca_decoded/res/xml/remote_config_defaults.xml
+
+      - name: Rebuild APK
+        run: |
+          apktool b zca_decoded -o zca.apk
+
+      - name: Run apk-mitm
+        run: |
+          apk-mitm --certificate cert-zwift-com.pem zca.apk
+
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION=${TAG_NAME#v}
+          cat << EOF > notes.md
+          Zwift Companion app $VERSION (Android) patched for use with [zwift-offline](https://github.com/zoffline/zwift-offline).
+          EOF
+          if gh release view $TAG_NAME >/dev/null 2>&1; then
+            gh release edit $TAG_NAME --title "ZCA $VERSION for zoffline" --notes-file notes.md
+          else
+            gh release create $TAG_NAME --title "ZCA $VERSION for zoffline" --notes-file notes.md
+          fi
+          APK_NAME="Zwift_Companion_${VERSION}-patched.apk"
+          mv zca-patched.apk $APK_NAME
+          gh release upload $TAG_NAME $APK_NAME --clobber
